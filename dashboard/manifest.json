@@ -1,8 +1,0 @@
-{
-  "name": "pairdown",
-  "label": "PairDown",
-  "description": "Live-preview Markdown editing of a local vault (feasibility spike).",
-  "version": "0.0.1",
-  "tab": { "path": "/pairdown", "hidden": true },
-  "api": "plugin_api.py"
-}
