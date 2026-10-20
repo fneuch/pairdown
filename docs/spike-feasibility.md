@@ -245,7 +245,7 @@ Negative controls for the editor: swapping the hiding decoration for a plain mar
 - Hot reload and `onDispose` behaviour (the editor is destroyed on unmount only; no `ctx.onDispose` hookup).
 - That the SDK version and `PANES_AREA` export on the target Desktop match the checkout read here (`v0.22.2`), and that the target Desktop's loader matches the checkout's loader.
 - Bundle size acceptability in the real app (584 KB unminified, 146 KB gzipped, uncached on each hot reload).
-- Windows execution of the real Desktop. The JS tooling (`npm ci`, build, check, tests, harness) did run on native Windows with Node 26.7.0 and produced the same bundle bytes; the Electron renderer was not run.
+- Windows execution of the real Desktop. The JS tooling (`npm ci`, build, check, tests, harness) did run on native Windows (Node 26.7.0 in the spike, Node 22.14.0 for the readable bundle) and produced the same bundle bytes as Linux; the Electron renderer was not run.
 
 ## Installing with the plugin scan
 
