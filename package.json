@@ -1,0 +1,33 @@
+{
+  "name": "pairdown",
+  "version": "0.0.1",
+  "private": true,
+  "description": "PairDown feasibility spike: Hermes Desktop plugin bundle",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check-bundle.mjs",
+    "check:fast": "node scripts/check-bundle.mjs --no-loader",
+    "test": "node --test scripts/check-bundle.test.mjs",
+    "harness": "node scripts/load-harness.mjs",
+    "verify": "npm run build && npm run check && npm test && npm run harness"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15"
+  },
+  "devDependencies": {
+    "acorn": "8.19.0",
+    "acorn-walk": "8.3.5",
+    "esbuild": "0.28.2",
+    "jsdom": "29.1.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  }
+}
