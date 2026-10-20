@@ -52,8 +52,9 @@ def _is_ignored(name: str) -> bool:
 _FORBIDDEN_PATH_CHARS = re.compile(r'[:\x00*?"<>|]')
 
 # Windows device names are reserved with any extension ("CON.md" is the console).
+# COM and LPT also take a superscript one, two or three as their port number.
 _WINDOWS_DEVICE_NAME = re.compile(
-    r"^(con|prn|aux|nul|conin\$|conout\$|(com|lpt)[0-9\u00b9\u00b2\u00b3])(\..*)?$", re.IGNORECASE
+    r"^(con|prn|aux|nul|conin\$|conout\$|(com|lpt)[0-9¹²³])(\..*)?$", re.IGNORECASE
 )
 
 _OPEN_FLAGS = (

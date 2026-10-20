@@ -46,15 +46,17 @@ The backend runs as that same user, so such an attacker can already read the use
 
 ```
 plugin.yaml                  name: pairdown
+__init__.py                  agent half: register() registers nothing (Hermes imports it, so it must exist)
 dashboard/manifest.json      { "name": "pairdown", "api": "plugin_api.py", tab hidden }
 dashboard/plugin_api.py      router = APIRouter(); /health /validate /list /read
 desktop/plugin.js            built artifact (committed, reproducible)
 desktop/src/                 index.jsx (registration), pane.jsx (pane), editor.js (CodeMirror + decoration)
 scripts/                     build.mjs, check-bundle.mjs (+ bundle-imports.mjs, desktop-loader.mjs, check-bundle.test.mjs), load-harness.mjs, externals.mjs
 tests/test_plugin_api.py     pytest + FastAPI TestClient
+tests/test_agent_half.py     the agent half defines register() and registers nothing
 ```
 
-Reference versions: Hermes `v0.22.2` (Windows host; the read-only checkout used for the loader is commit `d923a5eb487a17c0a68801bba9ef0f56c81040a8`), Node 24.13.0 (Linux) and 26.7.0 (Windows), Python 3.10.12 and 3.14.8 on Linux, Python 3.14.7 on Windows, uv 0.13.1 (Linux) and 0.12.17 (Windows), esbuild 0.28.2, acorn 8.19.0 / acorn-walk 8.3.5, CodeMirror `@codemirror/view` 6.43.15 / `state` 6.7.6 / `lang-markdown` 6.5.2 / `language` 6.13.1.
+Reference versions: Hermes `v0.22.2` (Windows host; the read-only checkout used for the loader is commit `d923a5eb487a17c0a68801bba9ef0f56c81040a8`), Node 24.13.0 (Linux) and 26.7.0 (Windows), Python 3.10.12 and 3.14.8 on Linux, Python 3.14.7 on Windows, uv 0.13.1 (Linux) and 0.12.17 (Windows), esbuild 0.28.2, acorn 8.19.0 / acorn-walk 8.3.5, CodeMirror `@codemirror/view` 6.43.15 / `state` 6.7.6 / `language` 6.13.1, `@lezer/markdown` 1.8.1.
 
 ## How Hermes mounts and reaches the backend (read from the v0.22.2 sources)
 
@@ -113,12 +115,12 @@ Other results from the same probe, run on both systems by the reviewer and on Li
 
 ### Tests
 
-`tests/test_plugin_api.py`, 67 tests against a temp fixture vault. They cover:
+`tests/test_plugin_api.py`, 79 tests against a temp fixture vault, plus one test for the agent half in `tests/test_agent_half.py`. The backend tests cover:
 - validate true, false, `.obsidian` as a file, missing root, relative root, missing parameter;
 - list with nested folders, an upper-case `.MD`, and `.obsidian`/`.trash`/`node_modules` skipped;
 - read of accents and emoji, CRLF byte-exactness, a name with spaces, `'` and `&`, backslash separators, invalid UTF-8;
 - 23 traversal and malformed-path variants: `../`, `..\`, `..%2f` and `%2e%2e/` (sent raw as well), UNC, `C:\` and `C:/`, `c:x`, `::$DATA`, NUL, trailing space and dot, an absolute path that points at a real secret file;
-- symlinked file and directory escaping root (403), an inside-root symlink (allowed), Windows reserved device names, root with forward slashes or a trailing separator;
+- symlinked file and directory escaping root (403), an inside-root symlink (allowed), Windows reserved device names (including the superscript port numbers `COM¹` to `LPT³`, tested on the pattern itself on every platform), root with forward slashes or a trailing separator;
 - race regressions: a file swapped for an escaping symlink while requests run, a parent folder swapped for an escaping link while requests run, and three deterministic cases that swap exactly before or after the server opens the file;
 - listing regressions for links that exist at request time: a folder link cycle, a folder link pointing outside, a folder link staying inside, and on Windows a real NTFS junction pointing outside and a junction cycle;
 - case regressions: mixed-case `Node_Modules`, `.Obsidian`, `.TRASH` (listed on Linux, excluded on Windows) and mixed-case spellings of existing ignored folders (403 on Windows), plus an 8.3 short-name alias of `node_modules` on Windows.
@@ -127,22 +129,22 @@ There is no test for R1 or R2, because they are out of scope. The static symlink
 
 Three tests are platform-specific and are reported as skipped on Linux (8.3 short names, junction outside, junction cycle). They run on Windows.
 
-Commands and real results at this branch's head (the last line of each run):
+Commands and real results at this branch's head (the last line of each run). The environment is created from `uv.lock` first, then pytest runs inside it:
 
 ```
-# Linux (WSL), Python 3.10.12, venv from uv.lock
-uv run --locked --python 3.10 pytest
-  -> 64 passed, 3 skipped, 1 warning in 9.78s      (the 3 skips are the NTFS-only tests)
+# Linux (WSL), Python 3.10.12
+uv sync --locked --python 3.10, then pytest in the created .venv
+  -> 77 passed, 3 skipped, 1 warning in 8.80s      (the 3 skips are the NTFS-only tests)
 
 # Linux (WSL), Python 3.14.8
-uv run --locked --python 3.14 pytest
-  -> 64 passed, 3 skipped, 1 warning in 9.70s
+the same with --python 3.14
+  -> 77 passed, 3 skipped, 1 warning in 9.23s
 
 # Native Windows, Hermes' bundled Python 3.14.7, uv on Windows, tree copied to a Windows scratch dir
-uv run --locked --python <hermes-tools>/python-3.14.7*/python.exe pytest
-  -> 67 passed, 1 warning in 9.78s                 (nothing skipped)
+the same with --python <hermes-tools>/python-3.14.7*/python.exe
+  -> 80 passed, 1 warning in 10.11s                (nothing skipped)
 
-uvx ruff check dashboard tests   -> All checks passed!
+ruff check dashboard tests   -> All checks passed!
 ```
 
 The one warning is Starlette saying `httpx` with `TestClient` is deprecated in favour of `httpx2`. It affects tests only. The race tests each spend about 4 s hammering requests, so a full run is about 10 s.
@@ -168,11 +170,11 @@ The reference backend (hermes-obsidian-memory `dashboard/api.py`, commit `112399
 
 ### What was proven
 
-`desktop/src` registers one pane through `@hermes/plugin-sdk` (`ctx.register({ area: PANES_AREA, ... })`). The pane has a root `<input>` and a "Check" button. The button calls `ctx.rest('/health')` and `ctx.rest('/validate?root=...')` and shows the JSON. The pane also mounts a CodeMirror 6 editor (`@codemirror/state`, `view`, `lang-markdown`, plus `language` for `syntaxTree`) with sample Markdown. The live-preview decoration walks the Markdown syntax tree and hides the `**` marks of every `StrongEmphasis` node that does not touch a selected line.
+`desktop/src` registers one pane through `@hermes/plugin-sdk` (`ctx.register({ area: PANES_AREA, ... })`). The pane has a root `<input>` and a "Check" button. The button calls `ctx.rest('/health')` and `ctx.rest('/validate?root=...')` and shows the JSON. The pane also mounts a CodeMirror 6 editor (`@codemirror/state`, `view`, `language` for `syntaxTree`, and the CommonMark parser `@lezer/markdown`, wired in as a `Language` in `desktop/src/editor.js`) with sample Markdown. The live-preview decoration walks the Markdown syntax tree and hides the `**` marks of every `StrongEmphasis` node that does not touch a selected line.
 
-- Bundle size: 474,937 bytes minified. The build is deterministic: rebuilding on Linux (Node 24.13.0) and on native Windows (Node 26.7.0) at this head gave the identical sha256 `844a6a9b15f158dd4c9c28f6d37d8bce99b83667f4137827832e5b73e8c194c4`, equal to the committed file. Supplemental sizes, measured with these exact commands on the committed file: `gzip -c desktop/plugin.js | wc -c` gives 164,401 bytes (gzip level 6); Node `zlib.gzipSync(readFileSync('desktop/plugin.js')).length` with default options gives 166,422 bytes; the same build settings as `scripts/build.mjs` with `minify: false` (banner included) give 877,240 bytes unminified.
-- Where the bytes go (minified): `@codemirror/view` 152 KB, `@lezer/javascript` 78 KB, `@codemirror/state` 47 KB, `@lezer/markdown` 36 KB. `@lezer/css`, `@lezer/html` and the `lang-html`/`lang-css`/`lang-javascript` wrappers add roughly 70 KB more. `@codemirror/lang-markdown` pulls those in for fenced-code and HTML support. Our code is 2.7 KB. (Per-package figures date from the first version of this report and were not re-measured.)
-- The committed bundle contains no dynamic `import()`, no `import.meta`, no `require()`, no `eval` and no `new Function`: it has exactly three static imports, the allowed ones, each written the way the Desktop loader recognises (`from"react"` style, no escapes, no comments).
+- Bundle size: 584,020 bytes, not minified (`scripts/build.mjs`, `minify: false`), so the file is readable and each bundled module is introduced by a comment naming its source path. The build is deterministic: the sha256 is `4f3350e84ffd02c71d2296ae8db29f1a7d9ecc3d35644e02a908a9c369177b4c`. Supplemental sizes, measured with these exact commands on the committed file: `gzip -c desktop/plugin.js | wc -c` gives 146,272 bytes (gzip level 6); Node `zlib.gzipSync(readFileSync('desktop/plugin.js')).length` with default options gives 146,367 bytes. The first version of the spike shipped a minified 474,937 byte bundle that included `@codemirror/lang-markdown`.
+- What is bundled, in order (the `// node_modules/...` comments in the file): `@marijn/find-cluster-break`, `@codemirror/state`, `style-mod`, `w3c-keyname`, `@codemirror/view`, `@lezer/common`, `@lezer/highlight`, `@codemirror/language`, `@lezer/markdown`, then our code (2.7 KB). `@codemirror/lang-markdown` is not used: it imports `@codemirror/lang-html`, which brings in the CSS and JavaScript grammars, the autocompletion and lint packages, and the HTML, CSS and JavaScript Lezer parsers, all for fenced code and inline HTML that this editor never needs. `editor.js` builds the Markdown `Language` from `@lezer/markdown` directly. The syntax tree the live preview walks (`StrongEmphasis`, `EmphasisMark`) is the same; the harness below checks it.
+- The committed bundle contains no dynamic `import()`, no `import.meta`, no `require()`, no `eval` and no `new Function`. It has four static import statements, all of allowed modules (`@hermes/plugin-sdk`, `react`, and `react/jsx-runtime` twice), each written as `from "name"` with no escapes and no comments, the way the Desktop loader recognises.
 
 ### Import gate
 
@@ -211,7 +213,7 @@ Controls. `npm test` runs `scripts/check-bundle.test.mjs`, 49 `node:test` cases,
 
 Every rejected case also asserts that the success message is never printed.
 
-Headless load (`scripts/load-harness.mjs`). This is not the real Desktop. It uses stub modules for the three allowed imports, jsdom instead of Electron, and a recording `ctx`. The Desktop's own `unsupportedImports` and `rewriteSpecifiers` (read-only) are applied to the minified bundle. That is stronger evidence than a re-implementation, because the real lexer copes with minified CodeMirror (regex-literal and string heuristics).
+Headless load (`scripts/load-harness.mjs`). This is not the real Desktop. It uses stub modules for the three allowed imports, jsdom instead of Electron, and a recording `ctx`. The Desktop's own `unsupportedImports` and `rewriteSpecifiers` (read-only) are applied to the bundle. That is stronger evidence than a re-implementation, because the real lexer copes with CodeMirror's regex-literal and string heuristics.
 
 ```
 HERMES_AGENT_DIR=<hermes-agent checkout> npm run harness
@@ -234,7 +236,7 @@ Negative controls for the editor: swapping the hiding decoration for a plain mar
 
 ### New finding: catalog admission lint
 
-`hermes_cli/plugin_validate_desktop.py` (used by `hermes plugins validate` and catalog admission, not by the local disk loader) scans `desktop/plugin.js` for "prototype patching" with the regex `X.prototype.y = ...`. It was run read-only against this bundle: 19 findings, all from CodeMirror and Lezer's own class setup (for example `ye.prototype.startSide=ye.prototype.endSide=0`), nothing from our code. The round 2 review reproduced the 19 findings. Local loading is not affected. Getting into the catalog would need a build step that removes these assignments (for example `Object.assign(X.prototype, {...})`), an exemption for bundled dependencies, or a different editor. Treat it as a follow-up before any catalog submission. The finding came from a copy of that single function run in isolation; the full `hermes plugins validate` was not run.
+`hermes_cli/plugin_validate_desktop.py` (used by `hermes plugins validate` and catalog admission, not by the local disk loader) scans `desktop/plugin.js` for "prototype patching" with the regex `X.prototype.y = ...`. The full `hermes plugins validate` was run read-only on this branch's head: its `desktop surface` check fails with 18 findings, all from CodeMirror and Lezer's own class setup, nothing from our code (the first version of the spike, with `lang-markdown`, had 19). Every other check passes, and its security-scan line is described under "Installing with the plugin scan". Local loading and `hermes plugins install` are not affected. Getting into the catalog would need a build step that removes these assignments (for example `Object.assign(X.prototype, {...})`), an exemption for bundled dependencies, or a different editor. Treat it as a follow-up before any catalog submission.
 
 ### Not proven (Risk B)
 
@@ -242,8 +244,37 @@ Negative controls for the editor: swapping the hiding decoration for a plain mar
 - CodeMirror layout in a real browser engine: scrolling, IME, selection by mouse, themes (`var(--ui-*)` variables are not used yet), focus handling inside a pane, the 10 s evaluation deadline on a cold machine. jsdom has no layout.
 - Hot reload and `onDispose` behaviour (the editor is destroyed on unmount only; no `ctx.onDispose` hookup).
 - That the SDK version and `PANES_AREA` export on the target Desktop match the checkout read here (`v0.22.2`), and that the target Desktop's loader matches the checkout's loader.
-- Bundle size acceptability in the real app (475 KB, uncached on each hot reload).
-- Windows execution of the real Desktop. The JS tooling (`npm ci`, build, check, tests, harness) did run on native Windows with Node 26.7.0 and produced the same bundle bytes; the Electron renderer was not run.
+- Bundle size acceptability in the real app (584 KB unminified, 146 KB gzipped, uncached on each hot reload).
+- Windows execution of the real Desktop. The JS tooling (`npm ci`, build, check, tests, harness) did run on native Windows (Node 26.7.0 in the spike, Node 22.14.0 for the readable bundle) and produced the same bundle bytes as Linux; the Electron renderer was not run.
+
+## Installing with the plugin scan
+
+`hermes plugins install` clones the repository and scans the whole tree before anything is moved into place (`tools/plugin_guard.py`, scanner `plugin-guard-v11`, read from the same Hermes checkout as the loader). The verdict follows the highest severity: one critical finding blocks, one high finding needs a confirmation (or `--force`), and medium and low findings are listed but leave the verdict safe. The scanner has no ignore list, so `docs/` and `tests/` are scanned like code; findings in tests and in documentation prose step down one severity.
+
+The scan is line based and pattern based. It cannot tell a CodeMirror tokenizer from an obfuscated payload, so the fix is to keep the shipped surface small and readable, not to change how strings are spelled.
+
+| Scan of | Verdict | Findings |
+|---|---|---|
+| `92ac2d8` (the spike as merged) | caution | 36: 2 high, 33 medium, 1 low |
+| this branch | caution | 60: 1 high, 58 medium, 1 low |
+
+What changed:
+
+| Finding at `92ac2d8` | Cause | Fix |
+|---|---|---|
+| high `inline_shell_exec` and 2 `backtick_subshell` in `desktop/plugin.js` | Packed parse tables of the Lezer HTML, CSS and JavaScript grammars (pulled in by `@codemirror/lang-markdown`) are long strings in which an exclamation mark is followed by a backtick, which the scanner reads as an inline-shell snippet or command substitution. | `desktop/src/editor.js` uses the CommonMark parser from `@lezer/markdown` directly, so those grammars are no longer bundled. |
+| 9 `js_char_code`, 5 `unicode_escape_chain`, 2 `hex_encoded_string` in `desktop/plugin.js` | Whole modules on single minified lines, so one match covered thousands of characters. | `scripts/build.mjs` builds with `minify: false`. The bundle is readable and every bundled module is marked by a source-path comment. The findings now point at individual tokenizer lines. |
+| medium `unicode_escape_chain` in `dashboard/plugin_api.py` | The reserved device name regex spelled the superscript digits as three unicode escapes. | The regex contains the characters `¹²³` themselves, with a comment. Tests cover the pattern directly. |
+| 5 `uv_run`, 1 `git_clone` in this document | Developer commands in the reports. | The commands are written as the `uv sync --locked` flow, and the install instructions use `hermes plugins install ... --ref`, which is also what the scan gates. |
+
+`hermes plugins doctor` loads the plugin through the real runtime, which imports the agent half. The spike had no `__init__.py`, so doctor reported "No __init__.py" and exited 1. The root `__init__.py` now defines a `register()` that registers nothing, and doctor exits 0.
+
+What is left, and why:
+
+- high `proc_access`, `dashboard/plugin_api.py` line 150, the `os.readlink` call on the process's own descriptor entry. This is the Linux branch of `_opened_path`: it asks the kernel where the file behind an open descriptor really lives, which is what keeps `/read` from returning bytes of a file that was swapped for a link while the request ran (F1). The scanner flags every use of the process file system. A replacement that looks the name up again after opening, and compares device and inode with the open descriptor, was tried against the existing suite: the stress test for a parent folder swapped for a link returned `OUTSIDE ROOT SENTINEL` after 63 requests, and two more tests failed. Name based verification cannot replace the descriptor based one. A containment design that never looks a name up twice (walking the path one component at a time from a pinned root descriptor) would remove the finding, but it changes the structure of `/read` and the seams the deterministic tests rely on, so it needs an owner decision. Until then a pinned install of this branch asks for confirmation.
+- medium `proc_access` in this document (line 85): the description of that same helper.
+- 47 medium `js_char_code`, 2 medium `unicode_escape_chain`, 1 low `hex_encoded_string` in `desktop/plugin.js`: character-code lookups and Unicode character classes in the CodeMirror view and the Lezer Markdown tokenizer. The file is readable and each hit sits under its `// node_modules/...` source comment.
+- 8 medium in `tests/test_plugin_api.py`: deliberately hostile paths (parent-folder segments, an absolute system path), non-UTF-8 bytes and non-ASCII sample text. They are the fixtures the containment tests send to the backend.
 
 ## Review history
 
@@ -334,26 +365,26 @@ bundle check FAILED:
 The reviewer's own `checker_comparison.mjs`, run against this head, shows the escaped and the comment-separated controls exiting 1 from the CLI (before the fix: 0), computed, dead-branch, concatenated and template controls exiting 1, and the committed bundle passing. The comparison script's embedded harness run on those two rejected bundles also exits 1, as intended: the harness refuses a bundle the loader would not rewrite.
 
 Final runs at this head:
-- Linux: `uv run --locked --python 3.10 pytest` and `--python 3.14`: 64 passed, 3 skipped each. `uvx ruff check dashboard tests`: All checks passed. `npm run verify` (build 474,937 bytes, check passed, `npm test` 49 pass 0 fail, harness passed), bundle sha256 `844a6a9b…c194c4`.
+- Linux: the pytest suite on Python 3.10 and 3.14, 64 passed, 3 skipped each. `ruff check dashboard tests`: All checks passed. `npm run verify` (build 474,937 bytes, check passed, `npm test` 49 pass 0 fail, harness passed), bundle sha256 `844a6a9b…c194c4`. These are the round 2 numbers; the bundle has changed since (see "Installing with the plugin scan").
 - Native Windows (Hermes Python 3.14.7, Node 26.7.0, tree copied to a scratch dir): `pytest` 67 passed; `npm ci` then `npm run verify`: 49 pass 0 fail, harness passed, same sha256. `ruff` was run on Linux only.
 
 Follow-ups, not done here:
 - Restrict `root` to configured vault roots (the product's own follow-up).
 - Run the operator steps on the real Windows Desktop to prove the gateway mount, `ctx.rest` auth and the real loader on the real bundle. Run the `F_GETPATH` branch on a Mac.
 - Decide whether `/list` should list notes behind in-root symlinked folders (today `/read` serves them but `/list` does not).
-- Catalog admission lint (19 prototype-patching hits) and the `lang-markdown` bundle size.
+- Catalog admission lint (18 prototype-patching hits in the bundled CodeMirror and Lezer code).
 - Move the Python and JS checks into CI; the repository has none yet. CI needs a hermes-agent checkout for the loader gate (`HERMES_AGENT_DIR`).
 
 ## Operator steps (live install and verification)
 
 Nothing in this spike installs into Hermes. Run these yourself after review, on the Windows host. `%HERMES_HOME%` is the Hermes home directory (the default is the `hermes` folder under `%LOCALAPPDATA%`). A profile-scoped run uses that profile's `config.yaml` for `plugins.enabled`; check which profile the Desktop backend was launched with.
 
-1. Get the package into the plugins root. The folder name must be `pairdown`. The built `desktop/plugin.js` is committed, so Node is not needed:
+1. Install the package, pinned to a commit. The folder name becomes `pairdown`. The built `desktop/plugin.js` is committed, so Node is not needed:
    ```
-   git clone --branch spike/feasibility git@github.com:fneuch/pairdown.git "%HERMES_HOME%\plugins\pairdown"
+   hermes plugins install fneuch/pairdown --ref <40-char commit SHA> --no-enable
    ```
-   Alternative, pinned by commit: `hermes plugins install fneuch/pairdown --ref <40-char SHA of the branch head>`. Untested here.
-2. Optional, read-only: `hermes plugins validate "%HERMES_HOME%\plugins\pairdown"`. Expect the `desktop surface` check to fail with prototype-patching hits (see above). That does not block a local install.
+   The install runs the plugin security scan first. See "Installing with the plugin scan" for the verdict this branch gets and why.
+2. Optional, read-only: `hermes plugins validate "%HERMES_HOME%\plugins\pairdown"`. Expect the `desktop surface` check to fail with prototype-patching hits (see above). That does not block an install.
 3. Enable the agent half (this is the `plugins.enabled` gate that allows importing `plugin_api.py`): `hermes plugins enable pairdown`. Confirm with `hermes plugins list`.
 4. Restart the Hermes backend / gateway that the Desktop connects to, as the SDK doc requires ("backend routes mount at startup"). Quit and reopen the Desktop if it manages the backend itself.
 5. In the Desktop: Capabilities, Plugins, press Rescan. `pairdown` should list with the desktop half off. Switch it on. A "PairDown" pane appears in the right zone.
@@ -371,7 +402,9 @@ Nothing in this spike installs into Hermes. Run these yourself after review, on 
 
 ```
 # Python (Linux or Windows; the race tests take about 10 s in total)
-uv run --locked pytest
+# Create the environment from uv.lock, then run pytest from it; ruff is not in uv.lock:
+uv sync --locked
+.venv/bin/pytest                                  # Windows: .venv\Scripts\pytest
 uvx ruff check dashboard tests
 
 # JS (Linux or Windows; Node 20+). HERMES_AGENT_DIR is a read-only hermes-agent checkout.
