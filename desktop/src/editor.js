@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view'
-import { markdown } from '@codemirror/lang-markdown'
-import { syntaxTree } from '@codemirror/language'
+import { Language, defineLanguageFacet, syntaxTree } from '@codemirror/language'
+import { parser as markdownParser } from '@lezer/markdown'
 
 export const SAMPLE_MARKDOWN = [
   '# PairDown spike',
@@ -11,6 +11,10 @@ export const SAMPLE_MARKDOWN = [
   'This other line has **more bold** and hides its markers when the cursor is elsewhere.',
   ''
 ].join('\n')
+
+// The CommonMark parser alone. @codemirror/lang-markdown would also bundle the HTML, CSS and
+// JavaScript grammars for fenced code and inline HTML, which this editor does not use.
+const markdownLanguage = new Language(defineLanguageFacet(), markdownParser, [], 'markdown')
 
 const hiddenMarker = Decoration.replace({})
 const strongText = Decoration.mark({ class: 'pd-strong' })
@@ -83,7 +87,7 @@ export function createEditor(parent, doc = SAMPLE_MARKDOWN) {
     state: EditorState.create({
       doc,
       selection: { anchor: Math.max(cursor, 0) },
-      extensions: [markdown(), livePreview, theme, EditorView.lineWrapping]
+      extensions: [markdownLanguage.extension, livePreview, theme, EditorView.lineWrapping]
     })
   })
 }
