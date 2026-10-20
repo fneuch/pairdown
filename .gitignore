@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .worktrees/
 .DS_Store
+.venv/
+.pytest_cache/
