@@ -32,9 +32,14 @@ def _load_plugin_api():
 
 
 @pytest.fixture(scope="session")
-def client():
+def plugin_api():
+    return _load_plugin_api()
+
+
+@pytest.fixture(scope="session")
+def client(plugin_api):
     app = FastAPI()
-    app.include_router(_load_plugin_api().router, prefix=PREFIX)
+    app.include_router(plugin_api.router, prefix=PREFIX)
     return TestClient(app)
 
 
@@ -309,6 +314,16 @@ def test_backend_source_has_no_shell_or_subprocess_use():
 def test_read_windows_reserved_device_names_never_return_content(api, vault, name):
     response = api("/read", root=str(vault), path=name)
     assert 400 <= response.status_code < 500
+
+
+@pytest.mark.parametrize("name", ["COM¹.md", "lpt²", "Com³.txt", "COM0", "nul.tar.gz", "conin$"])
+def test_device_name_pattern_matches_reserved_names(plugin_api, name):
+    assert plugin_api._WINDOWS_DEVICE_NAME.match(name)
+
+
+@pytest.mark.parametrize("name", ["COM10.md", "console.md", "COM⁴.md", "com.md", "aux2.md", "notes.md"])
+def test_device_name_pattern_ignores_ordinary_names(plugin_api, name):
+    assert not plugin_api._WINDOWS_DEVICE_NAME.match(name)
 
 
 def test_root_accepts_forward_slashes_and_trailing_separator(api, vault):
