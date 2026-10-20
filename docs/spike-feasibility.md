@@ -46,12 +46,14 @@ The backend runs as that same user, so such an attacker can already read the use
 
 ```
 plugin.yaml                  name: pairdown
+__init__.py                  agent half: register() registers nothing (Hermes imports it, so it must exist)
 dashboard/manifest.json      { "name": "pairdown", "api": "plugin_api.py", tab hidden }
 dashboard/plugin_api.py      router = APIRouter(); /health /validate /list /read
 desktop/plugin.js            built artifact (committed, reproducible)
 desktop/src/                 index.jsx (registration), pane.jsx (pane), editor.js (CodeMirror + decoration)
 scripts/                     build.mjs, check-bundle.mjs (+ bundle-imports.mjs, desktop-loader.mjs, check-bundle.test.mjs), load-harness.mjs, externals.mjs
 tests/test_plugin_api.py     pytest + FastAPI TestClient
+tests/test_agent_half.py     the agent half defines register() and registers nothing
 ```
 
 Reference versions: Hermes `v0.22.2` (Windows host; the read-only checkout used for the loader is commit `d923a5eb487a17c0a68801bba9ef0f56c81040a8`), Node 24.13.0 (Linux) and 26.7.0 (Windows), Python 3.10.12 and 3.14.8 on Linux, Python 3.14.7 on Windows, uv 0.13.1 (Linux) and 0.12.17 (Windows), esbuild 0.28.2, acorn 8.19.0 / acorn-walk 8.3.5, CodeMirror `@codemirror/view` 6.43.15 / `state` 6.7.6 / `language` 6.13.1, `@lezer/markdown` 1.8.1.
@@ -113,7 +115,7 @@ Other results from the same probe, run on both systems by the reviewer and on Li
 
 ### Tests
 
-`tests/test_plugin_api.py`, 79 tests against a temp fixture vault. They cover:
+`tests/test_plugin_api.py`, 79 tests against a temp fixture vault, plus one test for the agent half in `tests/test_agent_half.py`. The backend tests cover:
 - validate true, false, `.obsidian` as a file, missing root, relative root, missing parameter;
 - list with nested folders, an upper-case `.MD`, and `.obsidian`/`.trash`/`node_modules` skipped;
 - read of accents and emoji, CRLF byte-exactness, a name with spaces, `'` and `&`, backslash separators, invalid UTF-8;
@@ -132,15 +134,15 @@ Commands and real results at this branch's head (the last line of each run). The
 ```
 # Linux (WSL), Python 3.10.12
 uv sync --locked --python 3.10, then pytest in the created .venv
-  -> 76 passed, 3 skipped, 1 warning in 9.13s      (the 3 skips are the NTFS-only tests)
+  -> 77 passed, 3 skipped, 1 warning in 8.80s      (the 3 skips are the NTFS-only tests)
 
 # Linux (WSL), Python 3.14.8
 the same with --python 3.14
-  -> 76 passed, 3 skipped, 1 warning in 9.20s
+  -> 77 passed, 3 skipped, 1 warning in 9.23s
 
 # Native Windows, Hermes' bundled Python 3.14.7, uv on Windows, tree copied to a Windows scratch dir
 the same with --python <hermes-tools>/python-3.14.7*/python.exe
-  -> 79 passed, 1 warning in 11.42s                (nothing skipped)
+  -> 80 passed, 1 warning in 10.11s                (nothing skipped)
 
 ruff check dashboard tests   -> All checks passed!
 ```
@@ -264,6 +266,8 @@ What changed:
 | 9 `js_char_code`, 5 `unicode_escape_chain`, 2 `hex_encoded_string` in `desktop/plugin.js` | Whole modules on single minified lines, so one match covered thousands of characters. | `scripts/build.mjs` builds with `minify: false`. The bundle is readable and every bundled module is marked by a source-path comment. The findings now point at individual tokenizer lines. |
 | medium `unicode_escape_chain` in `dashboard/plugin_api.py` | The reserved device name regex spelled the superscript digits as three unicode escapes. | The regex contains the characters `¹²³` themselves, with a comment. Tests cover the pattern directly. |
 | 5 `uv_run`, 1 `git_clone` in this document | Developer commands in the reports. | The commands are written as the `uv sync --locked` flow, and the install instructions use `hermes plugins install ... --ref`, which is also what the scan gates. |
+
+`hermes plugins doctor` loads the plugin through the real runtime, which imports the agent half. The spike had no `__init__.py`, so doctor reported "No __init__.py" and exited 1. The root `__init__.py` now defines a `register()` that registers nothing, and doctor exits 0.
 
 What is left, and why:
 
