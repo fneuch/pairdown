@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { JSDOM, VirtualConsole } from 'jsdom'
 
 import { ALLOWED_EXTERNALS } from './externals.mjs'
+import { inspectBundle } from './bundle-imports.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const bundlePath = process.argv[2] ? resolve(process.argv[2]) : `${root}desktop/plugin.js`
@@ -68,6 +69,38 @@ async function loadDesktopLoader() {
   return import(writeModule('desktop-loader.mjs', code))
 }
 
+// The checker must accept nothing the Desktop loader refuses, and the checker's
+// allowlist must be a subset of the specifiers the Desktop really maps.
+function alignCheckerWithLoader(loader) {
+  const runtime = readFileSync(join(process.env.HERMES_AGENT_DIR, 'apps/desktop/src/sdk/runtime.ts'), 'utf8')
+  const mapStart = runtime.indexOf('export function sdkImportMap')
+  assert(mapStart > 0, 'sdk/runtime.ts layout changed: cannot find sdkImportMap')
+  const mapped = [...runtime.slice(mapStart).matchAll(/^\s*'?([@\w/.-]+)'?:\s*shimUrl\(/gm)].map(m => m[1])
+  for (const spec of ALLOWED_EXTERNALS) assert(mapped.includes(spec), `${spec} is not mapped by the Desktop SDK`)
+  step(`checker allowlist is a subset of the Desktop SDK import map (${mapped.join(', ')})`)
+
+  const samples = [
+    'import "left-pad"; export default {};',
+    'import x from "./other.js"; export default x;',
+    'import "https://example.invalid/x.js"; export default {};',
+    'export * from "left-pad"; export default {};',
+    'export default { load() { return import("left-pad") } };',
+    'if (false) import("https://example.invalid/no.js"); export default {};'
+  ]
+  for (const sample of samples) {
+    assert(loader.unsupportedImports(sample).length > 0, `Desktop loader unexpectedly accepts: ${sample}`)
+    assert(inspectBundle(sample, ALLOWED_EXTERNALS).problems.length > 0, `checker accepts what the Desktop refuses: ${sample}`)
+  }
+  step(`checker rejects all ${samples.length} samples the Desktop loader rejects (bare, relative, URL, export-from, dynamic, dead branch)`)
+
+  // Known gap in the loader: it matches quoted specifiers only, so a computed
+  // import slips through it. The checker closes that gap.
+  const computed = 'export default { load(s) { return import(s) } };'
+  assert.deepEqual(loader.unsupportedImports(computed), [], 'loader behaviour changed for computed imports')
+  assert(inspectBundle(computed, ALLOWED_EXTERNALS).problems.length > 0, 'checker accepts a computed import')
+  step('computed import(x): the Desktop loader does not see it, the checker rejects it')
+}
+
 function simpleRewrite(source) {
   let out = source
   for (const spec of ALLOWED_EXTERNALS) {
@@ -78,6 +111,7 @@ function simpleRewrite(source) {
 
 const source = readFileSync(bundlePath, 'utf8')
 const desktopLoader = await loadDesktopLoader()
+if (desktopLoader) alignCheckerWithLoader(desktopLoader)
 let rewritten
 if (desktopLoader) {
   assert.deepEqual(desktopLoader.unsupportedImports(source), [])
