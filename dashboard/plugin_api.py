@@ -4,7 +4,16 @@ Filesystem access is pure pathlib/os: no subprocess, no shell. A caller-supplied
 relative note path is checked lexically, then opened, and the location of the
 file that was actually opened is verified through its handle. Containment is
 never decided on a pathname that is looked up again afterwards, so a link or
-folder swapped in at any moment cannot make a read leave the vault root.
+folder swapped in while a /read request runs cannot make that read leave the
+vault root.
+
+Threat model (owner approval, 2026-10-19). In scope: whatever a request can
+attempt through its parameters, plus symlinks and junctions that exist when the
+request is made and a file replaced between check and read. Out of scope: a
+process that can already write inside the vault as the same user. It can create
+a hard link to an outside file (/read then serves that file under its in-vault
+name) or swap a folder for a link while /list runs (/list then reports names
+from the target folder). Neither is defended against here.
 """
 
 import errno
@@ -213,9 +222,10 @@ def validate(root: str):
 def list_notes(root: str):
     """List Markdown notes under root as sorted, POSIX-style relative paths.
 
-    Symlinked and junctioned folders are never entered, so a link cannot make the
-    walk leave the vault or loop. Names are enumerated, not read; the walk is not
-    protected against a folder being swapped for a link while it runs.
+    Symlinked and junctioned folders that exist when the walk looks at them are
+    never entered, so they cannot make the walk leave the vault or loop. Names are
+    enumerated, not read. A folder replaced by a link while the walk runs is out of
+    scope (owner approval, 2026-10-19): the walk then lists names from the target.
     """
     base = _root_dir(root)
     notes = sorted(path.relative_to(base).as_posix() for path in _walk_notes(base))
