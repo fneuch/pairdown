@@ -11,6 +11,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check-bundle.mjs",
+    "check:fast": "node scripts/check-bundle.mjs --no-loader",
     "test": "node --test scripts/check-bundle.test.mjs",
     "harness": "node scripts/load-harness.mjs",
     "verify": "npm run build && npm run check && npm test && npm run harness"

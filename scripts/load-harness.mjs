@@ -7,10 +7,11 @@
 // 2. Mount the registered pane in jsdom with real React and check the
 //    CodeMirror live-preview decoration and the ctx.rest calls.
 //
-// Optional: set HERMES_AGENT_DIR to a hermes-agent checkout and the Desktop's
-// own import allowlist and specifier rewriter (runtime-loader.ts) are extracted
-// and applied to the bundle, instead of the simple rewriter used otherwise.
-import { transform } from 'esbuild'
+// HERMES_AGENT_DIR must name a hermes-agent checkout: the Desktop's own import
+// allowlist and specifier rewriter (runtime-loader.ts) are extracted from it and
+// applied to the bundle (see desktop-loader.mjs). Pass --no-loader to run
+// without them, using a plain string rewriter; that mode proves nothing about
+// the Desktop's import handling and says so.
 import { strict as assert } from 'node:assert'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -21,9 +22,18 @@ import { JSDOM, VirtualConsole } from 'jsdom'
 
 import { ALLOWED_EXTERNALS } from './externals.mjs'
 import { inspectBundle } from './bundle-imports.mjs'
+import { desktopLoaderProblems, loadDesktopLoader } from './desktop-loader.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const bundlePath = process.argv[2] ? resolve(process.argv[2]) : `${root}desktop/plugin.js`
+const cliArgs = process.argv.slice(2)
+const skipLoader = cliArgs.includes('--no-loader')
+const bundleArg = cliArgs.find(arg => !arg.startsWith('--'))
+const bundlePath = bundleArg ? resolve(bundleArg) : `${root}desktop/plugin.js`
+const agentDir = process.env.HERMES_AGENT_DIR
+if (!skipLoader && !agentDir) {
+  console.error('harness FAILED: HERMES_AGENT_DIR is not set; the Desktop loader is required (or pass --no-loader)')
+  process.exit(1)
+}
 const require = createRequire(import.meta.url)
 const work = mkdtempSync(join(tmpdir(), 'pairdown-harness-'))
 const step = message => console.log(`ok - ${message}`)
@@ -56,23 +66,15 @@ const shimUrls = Object.fromEntries(
   Object.entries(namespaces).map(([spec, ns], i) => [spec, writeModule(`shim-${i}.mjs`, shimSource(ns))])
 )
 
-async function loadDesktopLoader() {
-  const dir = process.env.HERMES_AGENT_DIR
-  if (!dir) return null
-  const source = readFileSync(join(dir, 'apps/desktop/src/contrib/runtime-loader.ts'), 'utf8')
-  const start = source.indexOf('const importSpecifierRe')
-  const end = source.indexOf('export function unloadRuntimePlugin')
-  assert(start > 0 && end > start, 'runtime-loader.ts layout changed: cannot extract the specifier functions')
-  const ts = `const sdkImportMap = () => (${JSON.stringify(shimUrls)})\n${source.slice(start, end)}\n` +
-    'export { rewriteSpecifiers, unsupportedImports }\n'
-  const { code } = await transform(ts, { loader: 'ts', format: 'esm' })
-  return import(writeModule('desktop-loader.mjs', code))
+async function loadLoader() {
+  return skipLoader ? null : loadDesktopLoader(agentDir, shimUrls)
 }
 
-// The checker must accept nothing the Desktop loader refuses, and the checker's
-// allowlist must be a subset of the specifiers the Desktop really maps.
+// The checker must accept nothing the Desktop loader refuses or leaves
+// unrewritten, and the checker's allowlist must be a subset of the specifiers
+// the Desktop really maps.
 function alignCheckerWithLoader(loader) {
-  const runtime = readFileSync(join(process.env.HERMES_AGENT_DIR, 'apps/desktop/src/sdk/runtime.ts'), 'utf8')
+  const runtime = readFileSync(join(agentDir, 'apps/desktop/src/sdk/runtime.ts'), 'utf8')
   const mapStart = runtime.indexOf('export function sdkImportMap')
   assert(mapStart > 0, 'sdk/runtime.ts layout changed: cannot find sdkImportMap')
   const mapped = [...runtime.slice(mapStart).matchAll(/^\s*'?([@\w/.-]+)'?:\s*shimUrl\(/gm)].map(m => m[1])
@@ -85,13 +87,21 @@ function alignCheckerWithLoader(loader) {
     'import "https://example.invalid/x.js"; export default {};',
     'export * from "left-pad"; export default {};',
     'export default { load() { return import("left-pad") } };',
-    'if (false) import("https://example.invalid/no.js"); export default {};'
+    'if (false) import("https://example.invalid/no.js"); export default {};',
+    // Allowed names that the Desktop lexer does not read as imports.
+    'import React from "re\\u0061ct"; export default React;',
+    'import React from "re\\u{61}ct"; export default React;',
+    'import/*c*/("react"); export default {};',
+    'export default { load() { return import(/*c*/"react") } };',
+    'import React from /*c*/ "react"; export default React;',
+    'import"react"; export default {};'
   ]
   for (const sample of samples) {
-    assert(loader.unsupportedImports(sample).length > 0, `Desktop loader unexpectedly accepts: ${sample}`)
+    const loaderProblems = desktopLoaderProblems(sample, loader, shimUrls)
+    assert(loaderProblems.length > 0, `Desktop loader gate unexpectedly accepts: ${sample}`)
     assert(inspectBundle(sample, ALLOWED_EXTERNALS).problems.length > 0, `checker accepts what the Desktop refuses: ${sample}`)
   }
-  step(`checker rejects all ${samples.length} samples the Desktop loader rejects (bare, relative, URL, export-from, dynamic, dead branch)`)
+  step(`checker and loader gate both reject all ${samples.length} samples (bare, relative, URL, export-from, dynamic, dead branch, escaped literal, comment-separated, no whitespace)`)
 
   // Known gap in the loader: it matches quoted specifiers only, so a computed
   // import slips through it. The checker closes that gap.
@@ -110,18 +120,18 @@ function simpleRewrite(source) {
 }
 
 const source = readFileSync(bundlePath, 'utf8')
-const desktopLoader = await loadDesktopLoader()
+const desktopLoader = await loadLoader()
 if (desktopLoader) alignCheckerWithLoader(desktopLoader)
 let rewritten
 if (desktopLoader) {
-  assert.deepEqual(desktopLoader.unsupportedImports(source), [])
+  assert.deepEqual(desktopLoaderProblems(source, desktopLoader, shimUrls), [])
   rewritten = desktopLoader.rewriteSpecifiers(source)
   assert.notEqual(rewritten, source)
   step('Desktop runtime-loader import allowlist accepts the bundle (unsupportedImports() returned [])')
-  step('Desktop runtime-loader rewriteSpecifiers() rewrote the bundle imports')
+  step('Desktop runtime-loader rewriteSpecifiers() rewrote every import of the bundle to a shim module')
 } else {
   rewritten = simpleRewrite(source)
-  console.log('skip - HERMES_AGENT_DIR not set: using the simple specifier rewriter, Desktop loader code not exercised')
+  console.log('skip - --no-loader: using the simple specifier rewriter, Desktop loader code not exercised')
 }
 for (const spec of ALLOWED_EXTERNALS) assert(!rewritten.includes(`"${spec}"`), `unrewritten import of ${spec}`)
 
